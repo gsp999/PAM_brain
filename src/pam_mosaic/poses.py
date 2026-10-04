@@ -13,6 +13,7 @@ class Edge:
     moving: int
     matrix: np.ndarray  # moving -> reference
     weight: float = 1.0
+    kind: str = "frontend"
 
 
 def matrix_to_pose(m: np.ndarray) -> np.ndarray:

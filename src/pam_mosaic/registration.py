@@ -62,12 +62,17 @@ def _overlap(matrix: np.ndarray, reference_shape: tuple[int, int],
 
 
 def sift_inliers(reference: np.ndarray, moving: np.ndarray,
-                 min_inliers: int = 12) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+                 min_inliers: int = 12, *,
+                 reference_features=None, moving_features=None) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
     """Return moving/reference SIFT points and their RANSAC rigid initial pose."""
-    ref8, mov8 = registration_view(reference), registration_view(moving)
-    sift = cv2.SIFT_create(nfeatures=1200)
-    key_ref, desc_ref = sift.detectAndCompute(ref8, None)
-    key_mov, desc_mov = sift.detectAndCompute(mov8, None)
+    if reference_features is None or moving_features is None:
+        ref8, mov8 = registration_view(reference), registration_view(moving)
+        sift = cv2.SIFT_create(nfeatures=1200)
+        key_ref, desc_ref = sift.detectAndCompute(ref8, None)
+        key_mov, desc_mov = sift.detectAndCompute(mov8, None)
+    else:
+        key_ref, desc_ref = reference_features
+        key_mov, desc_mov = moving_features
     if desc_ref is None or desc_mov is None or len(desc_ref) < 2 or len(desc_mov) < 2:
         return None
     pairs = cv2.BFMatcher(cv2.NORM_L2).knnMatch(desc_mov, desc_ref, k=2)
@@ -91,12 +96,15 @@ def sift_inliers(reference: np.ndarray, moving: np.ndarray,
 
 
 def register(reference: np.ndarray, moving: np.ndarray, *, min_inliers: int = 12,
-             max_points: int = 350, refine_geometry: bool = True) -> Match:
+             max_points: int = 350, refine_geometry: bool = True,
+             reference_features=None, moving_features=None) -> Match:
     """Estimate an SE(2) transform; reject weak or nonoverlapping matches."""
     ref8, mov8 = registration_view(reference), registration_view(moving)
     identity = np.eye(2, 3, dtype=np.float64)
     invalid = Match(identity, 0, float("inf"), 0.0, False)
-    correspondence = sift_inliers(reference, moving, min_inliers)
+    correspondence = sift_inliers(reference, moving, min_inliers,
+                                 reference_features=reference_features,
+                                 moving_features=moving_features)
     if correspondence is None:
         return invalid
     src, dst, matrix = correspondence
@@ -129,3 +137,90 @@ def register(reference: np.ndarray, moving: np.ndarray, *, min_inliers: int = 12
     overlap = _overlap(matrix, reference.shape, moving.shape)
     valid = bool(median <= 5.0 and overlap >= 0.15)
     return Match(matrix, len(src), median, overlap, valid)
+
+
+def register_translation_fallback(reference: np.ndarray, moving: np.ndarray) -> Match:
+    """Strict low-texture fallback for *adjacent* frames only.
+
+    Phase correlation supplies a translation hypothesis. A high phase peak,
+    substantial actual image correlation after warping, and a small step are
+    all required; this must not be used as a generic loop-closure matcher.
+    """
+    ref = registration_view(reference).astype(np.float32)
+    mov = registration_view(moving).astype(np.float32)
+    identity = np.eye(2, 3, dtype=np.float64)
+    invalid = Match(identity, 0, float("inf"), 0.0, False)
+    (dx, dy), response = cv2.phaseCorrelate(ref, mov)
+    if not np.isfinite([dx, dy, response]).all() or response < .5 or np.hypot(dx, dy) > 30:
+        return invalid
+    matrix = np.array([[1., 0., -dx], [0., 1., -dy]], dtype=np.float64)
+    warped = cv2.warpAffine(mov, matrix, (ref.shape[1], ref.shape[0]))
+    mask = cv2.warpAffine(np.ones_like(mov, np.uint8), matrix,
+                          (ref.shape[1], ref.shape[0]), flags=cv2.INTER_NEAREST) > 0
+    if mask.mean() < .7:
+        return invalid
+    a, b = ref[mask], warped[mask]
+    if a.std() < 3 or b.std() < 3:
+        return invalid
+    correlation = float(np.corrcoef(a, b)[0, 1])
+    if not np.isfinite(correlation) or correlation < .55:
+        return invalid
+    return Match(matrix, 0, float(1 - correlation), float(mask.mean()), True)
+
+
+def _warped_correlation(reference: np.ndarray, moving: np.ndarray,
+                        matrix: np.ndarray) -> tuple[float, float]:
+    ref = registration_view(reference).astype(np.float32)
+    mov = registration_view(moving).astype(np.float32)
+    h, w = ref.shape
+    warped = cv2.warpAffine(mov, matrix.astype(np.float32), (w, h))
+    mask = cv2.warpAffine(np.ones_like(mov, np.uint8), matrix.astype(np.float32),
+                          (w, h), flags=cv2.INTER_NEAREST) > 0
+    overlap = float(mask.mean())
+    if overlap < .3 or ref[mask].std() < 3 or warped[mask].std() < 3:
+        return overlap, float("nan")
+    return overlap, float(np.corrcoef(ref[mask], warped[mask])[0, 1])
+
+
+def register_enhanced_adjacent(reference: np.ndarray, moving: np.ndarray) -> Match:
+    """Recover a missed adjacent match using contrast-enhanced SIFT evidence."""
+    invalid = Match(np.eye(2, 3), 0, float("inf"), 0.0, False)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    sift = cv2.SIFT_create(nfeatures=1800)
+    ref_features = sift.detectAndCompute(clahe.apply(registration_view(reference)), None)
+    mov_features = sift.detectAndCompute(clahe.apply(registration_view(moving)), None)
+    matched = sift_inliers(reference, moving, 15,
+                           reference_features=ref_features, moving_features=mov_features)
+    if matched is None:
+        return invalid
+    src, dst, _ = matched
+    if len(src) < 20 or len(dst) < 20:
+        return invalid
+    spread = min(np.sqrt(max(0., np.linalg.eigvalsh(np.cov(points.T))[0]))
+                 for points in (src, dst))
+    if spread < 40:
+        return invalid
+    match = register(reference, moving, min_inliers=15, refine_geometry=False,
+                     reference_features=ref_features, moving_features=mov_features)
+    if not match.valid:
+        return invalid
+    overlap, correlation = _warped_correlation(reference, moving, match.matrix)
+    angle = abs(float(np.degrees(np.arctan2(match.matrix[1, 0], match.matrix[0, 0]))))
+    valid = bool(match.inliers >= 20 and match.median_error <= 2.5 and
+                 overlap >= .4 and correlation >= .55 and angle <= 5)
+    return Match(match.matrix, match.inliers, match.median_error, overlap, valid)
+
+
+def register_weak_signal_adjacent(reference: np.ndarray, moving: np.ndarray) -> Match:
+    """Translation-only fallback; never infer a pose from featureless frames."""
+    invalid = Match(np.eye(2, 3), 0, float("inf"), 0.0, False)
+    ref = registration_view(reference).astype(np.float32)
+    mov = registration_view(moving).astype(np.float32)
+    (dx, dy), response = cv2.phaseCorrelate(ref, mov)
+    if not np.isfinite([dx, dy, response]).all() or response < .2 or np.hypot(dx, dy) > 50:
+        return invalid
+    matrix = np.array([[1., 0., -dx], [0., 1., -dy]], dtype=np.float64)
+    overlap, correlation = _warped_correlation(reference, moving, matrix)
+    if overlap < .8 or not np.isfinite(correlation) or correlation < .7:
+        return invalid
+    return Match(matrix, 0, float(1 - correlation), overlap, True)

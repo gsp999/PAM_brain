@@ -41,7 +41,10 @@ def stitch(component_root: Path, output: Path, *, min_frames: int = 50) -> dict:
         size = fuse_tiles([images[i] for i in group], [weights[i] for i in group], poses, destination)
         np.save(destination / "tile_poses_xytheta.npy", poses)
         result_groups.append({"tiles": [selected[i]["path"] for i in group],
-                              "source_files": sum(selected[i]["frames"] for i in group),
+                              "source_files": len({source["file_index"] for i in group
+                                                   for source in selected[i].get("frame_sources", [])})
+                              if any("frame_sources" in selected[i] for i in group)
+                              else sum(selected[i]["frames"] for i in group),
                               "size_xy": size, "path": str(destination)})
     output.mkdir(parents=True, exist_ok=True)
     report = {"solver": "lm", "min_frames": min_frames, "selected_tiles": len(selected),
@@ -52,8 +55,8 @@ def stitch(component_root: Path, output: Path, *, min_frames: int = 50) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Connect local PAM mosaics")
-    parser.add_argument("--components", type=Path, default=Path("outputs/lm_full"))
-    parser.add_argument("--output", type=Path, default=Path("outputs/lm_stitched"))
+    parser.add_argument("--components", type=Path, default=Path("outputs/moderate_denoise_full"))
+    parser.add_argument("--output", type=Path, default=Path("outputs/moderate_denoise_stitched"))
     parser.add_argument("--min-frames", type=int, default=50)
     args = parser.parse_args()
     report = stitch(args.components, args.output, min_frames=args.min_frames)
