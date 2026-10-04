@@ -1,0 +1,26 @@
+# Raw acquisitions and generated mosaics
+/PAM_Skull_FYH_20260929/
+/outputs/
+
+# Python caches, environments, and packaging artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+*.egg-info/
+/build/
+/dist/
+
+# Local editor and operating-system files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local assistant/tool state
+/.agents/
+/.aws/
+/.codex/

@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pam-mosaic"
+version = "0.1.0"
+description = "Two-dimensional photoacoustic mosaic reconstruction"
+requires-python = ">=3.10"
+dependencies = ["numpy", "scipy", "opencv-python"]
+
+[project.scripts]
+pam-mosaic = "pam_mosaic.cli:main"
+pam-stitch-tiles = "pam_mosaic.tile_stitch:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
