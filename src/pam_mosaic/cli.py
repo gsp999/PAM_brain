@@ -12,7 +12,7 @@ def main() -> None:
     parser.add_argument("--data", type=Path, default=Path("PAM_Skull_FYH_20260929"))
     parser.add_argument("--logs", type=Path, default=None)
     parser.add_argument("--log", type=Path, action="append", default=[], help="individual scan log; repeatable")
-    parser.add_argument("--output", type=Path, default=Path("outputs/moderate_denoise_full"))
+    parser.add_argument("--output", type=Path, default=Path("outputs/frontend_only_full"))
     parser.add_argument("--start", type=int, default=1)
     parser.add_argument("--stop", type=int, default=None)
     parser.add_argument("--forward-only", action="store_true")
@@ -29,6 +29,8 @@ def main() -> None:
     parser.add_argument("--even-direction", choices=["auto", "as-is", "flip"], default="auto")
     parser.add_argument("--temporal-window", type=int, default=5)
     parser.add_argument("--appearance-neighbors", type=int, default=6)
+    parser.add_argument("--validate-rotations", action="store_true",
+                        help="retain rotation only when it outperforms translation using bidirectional evidence")
     args = parser.parse_args()
     if not args.validated_roundtrip:
         # Current-only processing defaults must not leak into an explicitly
@@ -50,7 +52,8 @@ def main() -> None:
                  appearance_neighbors=args.appearance_neighbors,
                  validated_roundtrip=args.validated_roundtrip,
                  frontend_recovery=args.frontend_recovery,
-                 suppress_speckles=args.suppress_speckles)
+                 suppress_speckles=args.suppress_speckles,
+                 validate_rotations=args.validate_rotations)
     print(f"Built {len(report['components'])} connected mosaic(s) from {len(records)} files")
 
 

@@ -25,6 +25,8 @@ def candidate_pairs(frames: list[np.ndarray], *, temporal_window: int = 5,
         for gap in (2, 3, 5):
             if gap <= temporal_window and i + gap < count:
                 pairs.add((i, i + gap))
+    if appearance_neighbors <= 0:
+        return sorted(pairs, key=lambda p: (p[1]-p[0], p[0]))
     descriptors = np.stack([appearance_vector(frame) for frame in frames])
     similarity = descriptors @ descriptors.T
     for i in range(count):

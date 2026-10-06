@@ -4,7 +4,8 @@ import numpy as np
 
 from pam_mosaic.registration import (register, register_translation_fallback,
                                      register_enhanced_adjacent,
-                                     register_weak_signal_adjacent)
+                                     register_weak_signal_adjacent,
+                                     select_supported_motion)
 
 
 class RegistrationTests(unittest.TestCase):
@@ -34,6 +35,33 @@ class RegistrationTests(unittest.TestCase):
         blank = np.full((500, 500), .04, np.float32)
         self.assertFalse(register_enhanced_adjacent(blank, blank).valid)
         self.assertFalse(register_weak_signal_adjacent(blank, blank).valid)
+
+    def test_motion_selection_keeps_a_supported_rotation(self):
+        rng = np.random.default_rng(19)
+        image = np.zeros((400, 400), np.float32)
+        for _ in range(180):
+            x, y = rng.integers(30, 370, size=2)
+            cv2.circle(image, (int(x), int(y)), 3,
+                       float(rng.uniform(.08, .25)), -1)
+        matrix = cv2.getRotationMatrix2D((200, 200), 3.0, 1.0)
+        matrix[:, 2] += [7, -5]
+        moving = cv2.warpAffine(image, matrix, (400, 400))
+        result = select_supported_motion(image, moving)
+        self.assertTrue(result.match.valid)
+        self.assertEqual(result.model, "rigid")
+
+    def test_motion_selection_uses_translation_without_rotation_evidence(self):
+        rng = np.random.default_rng(23)
+        image = np.zeros((400, 400), np.float32)
+        for _ in range(180):
+            x, y = rng.integers(30, 370, size=2)
+            cv2.circle(image, (int(x), int(y)), 3,
+                       float(rng.uniform(.08, .25)), -1)
+        moving = cv2.warpAffine(image, np.float32([[1, 0, 8], [0, 1, -6]]),
+                                (400, 400))
+        result = select_supported_motion(image, moving)
+        self.assertTrue(result.match.valid)
+        self.assertEqual(result.model, "translation")
 
 
 if __name__ == "__main__":

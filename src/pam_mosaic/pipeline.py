@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from pathlib import Path
 import cv2
 import numpy as np
@@ -11,14 +12,17 @@ from .graph import candidate_pairs, connected_components
 from .poses import Edge, initial_poses, optimize_poses
 from .reconstruction import Calibration, choose_even_direction, reconstruct
 from .registration import (register, register_enhanced_adjacent,
-                           register_weak_signal_adjacent, registration_view)
+                           register_weak_signal_adjacent, registration_view,
+                           select_supported_motion)
 from .roundtrip import calibrate as calibrate_roundtrip, fuse_if_aligned
+from .checkpoint import Checkpoint
 
 
 def run(records: list[Record], output: Path, *, reverse_even: bool | None = None,
         use_backward: bool = True, temporal_window: int = 5,
         appearance_neighbors: int = 6, validated_roundtrip: bool = False,
-        frontend_recovery: bool = False, suppress_speckles: bool = False) -> dict:
+        frontend_recovery: bool = False, suppress_speckles: bool = False,
+        validate_rotations: bool = False) -> dict:
     if not records:
         raise ValueError("No data files selected")
     if frontend_recovery and not validated_roundtrip:
@@ -51,7 +55,23 @@ def run(records: list[Record], output: Path, *, reverse_even: bool | None = None
             fixed[:,:2] = [[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]]
             calibration = Calibration(reverse_even_x=reverse_even, backward_matrix=fixed)
     del calibration_pairs
-    for record in records:
+    cache = Checkpoint(output, records, {
+        'calibration': asdict(calibration), 'use_backward': use_backward,
+        'temporal_window': temporal_window, 'appearance_neighbors': appearance_neighbors,
+        'validated_roundtrip': validated_roundtrip, 'frontend_recovery': frontend_recovery,
+        'suppress_speckles': suppress_speckles, 'validate_rotations': validate_rotations})
+    saved_frames = len(cache.frames)
+    if saved_frames:
+        print(f'resuming {saved_frames} reconstructed frames', flush=True)
+    for frame_number, record in enumerate(records):
+        if frame_number < saved_frames:
+            image, decision = cache.frame(frame_number)
+            frames.append(image)
+            if validated_roundtrip:
+                roundtrip_decisions.append(decision)
+                if suppress_speckles:
+                    speckle_changes.append({key: decision[key] for key in ('file_index', 'changed_pixels', 'selected')})
+            continue
         forward, backward = reconstruct(record.path, calibration)
         if validated_roundtrip:
             image, decision = fuse_if_aligned(
@@ -70,20 +90,62 @@ def run(records: list[Record], output: Path, *, reverse_even: bool | None = None
             frames.append(image.astype(np.float32))
         else:
             frames.append(forward)
+        cache.save_frame(frame_number, frames[-1], roundtrip_decisions[-1] if validated_roundtrip else None)
+        if (frame_number+1)%100 == 0 or frame_number+1 == len(records):
+            print(f'reconstructed {frame_number+1}/{len(records)} files', flush=True)
+    cache.flush_frames()
 
     edges: list[Edge] = []
     candidates = candidate_pairs(frames, temporal_window=temporal_window,
                                  appearance_neighbors=appearance_neighbors)
+    saved_pairs = cache.read('pairs.json', {})
+    saved_details = saved_pairs.get('details', [])
+    if saved_details and saved_pairs['candidates'] != [list(pair) for pair in candidates]:
+        raise ValueError('Checkpoint candidate order changed')
+    if saved_details:
+        print(f'resuming {len(saved_details)} matched pairs', flush=True)
     for done, (reference, moving) in enumerate(candidates, 1):
-        match = register(frames[reference], frames[moving])
+        if done <= len(saved_details):
+            detail = saved_details[done-1]
+            details.append(detail)
+            if detail['valid']:
+                weight = min(2., detail['inliers']/30)
+                if detail['motion_model'] == 'rigid_unverified':
+                    weight *= .25
+                edges.append(Edge(reference, moving, np.asarray(detail['matrix']), weight))
+            continue
+        motion = (select_supported_motion(frames[reference], frames[moving])
+                  if validate_rotations else None)
+        match = motion.match if motion is not None else register(frames[reference], frames[moving])
         match_source = "filtered"
         if match.valid:
-            edges.append(Edge(reference, moving, match.matrix, min(2.0, match.inliers / 30)))
+            weight = min(2.0, match.inliers / 30)
+            if motion is not None and motion.model == "rigid_unverified":
+                weight *= .25
+            edges.append(Edge(reference, moving, match.matrix, weight))
+        rotation_evidence = None
+        if motion is not None:
+            rotation_evidence = {
+                "rigid_angle_deg": motion.rigid_angle_deg,
+                "inlier_spread_px": motion.inlier_spread_px,
+                "inlier_hull_fraction": motion.inlier_hull_fraction,
+                "rigid_point_error_px": motion.rigid_point_error_px,
+                "translation_point_error_px": motion.translation_point_error_px,
+                "rigid_correlation": motion.rigid_correlation,
+                "translation_correlation": motion.translation_correlation,
+                "closure_shift_px": motion.closure_shift_px,
+                "closure_angle_deg": motion.closure_angle_deg,
+                "rotation_supported": motion.rotation_supported,
+            }
         details.append({"reference": records[reference].index, "moving": records[moving].index,
                         "inliers": match.inliers, "median_error": match.median_error if np.isfinite(match.median_error) else None,
                         "overlap": match.overlap, "valid": match.valid,
-                        "match_source": match_source})
+                        "match_source": match_source,
+                        "matrix": match.matrix.tolist() if match.valid else None,
+                        "motion_model": motion.model if motion is not None else "rigid",
+                        "rotation_evidence": rotation_evidence})
         if done % 50 == 0 or done == len(candidates):
+            cache.save_pairs(candidates, details)
             print(f"matched {done}/{len(candidates)} candidate pairs", flush=True)
 
     recovery_counts = {"enhanced_sift": 0, "weak_signal_phase": 0}
@@ -117,7 +179,8 @@ def run(records: list[Record], output: Path, *, reverse_even: bool | None = None
                 detail.update({"valid": True, "recovery_method": method,
                                "inliers": match.inliers,
                                "median_error": match.median_error,
-                               "overlap": match.overlap})
+                               "overlap": match.overlap,
+                               "matrix": match.matrix.tolist()})
                 recovery_counts[method] += 1
         print(f"recovered {sum(recovery_counts.values())} adjacent links", flush=True)
 
@@ -139,7 +202,8 @@ def run(records: list[Record], output: Path, *, reverse_even: bool | None = None
                            "file_indices": [records[i].index for i in group],
                            "timestamps": [records[i].timestamp.isoformat() if records[i].timestamp else None for i in group],
                            "frames": len(group), "size_xy": size, "path": str(component_dir)})
-    report = {"solver": "lm", "validated_roundtrip": validated_roundtrip,
+    report = {"solver": "lm", "validate_rotations": validate_rotations,
+              "validated_roundtrip": validated_roundtrip,
               "frontend_recovery": frontend_recovery,
               "frontend_recovery_counts": recovery_counts,
               "roundtrip_decisions": roundtrip_decisions,

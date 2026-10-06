@@ -12,8 +12,8 @@ dependencies = ["numpy", "scipy", "opencv-python"]
 [project.scripts]
 pam-mosaic = "pam_mosaic.cli:main"
 pam-stitch-tiles = "pam_mosaic.tile_stitch:main"
-pam-refine-backend = "pam_mosaic.refine_backend:main"
 pam-mosaic-frames = "pam_mosaic.frame_pipeline:main"
+pam-audit-mosaic = "pam_mosaic.audit:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
