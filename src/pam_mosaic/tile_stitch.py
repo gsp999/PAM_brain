@@ -60,7 +60,7 @@ def _consistent_pose_graph(count: int, edges: list[Edge], scores: dict[tuple[int
 
 
 def stitch(component_root: Path, output: Path, *, min_frames: int = 50,
-           cycle_gating: bool = True) -> dict:
+           cycle_gating: bool = True, refine_geometry: bool = True) -> dict:
     source = json.loads((component_root / "report.json").read_text())
     selected = [c for c in source["components"] if c["frames"] >= min_frames]
     selected.sort(key=lambda c: -c["frames"])
@@ -74,7 +74,7 @@ def stitch(component_root: Path, output: Path, *, min_frames: int = 50,
     for a in range(len(selected)):
         for b in range(a+1, len(selected)):
             match = register(images[a], images[b], min_inliers=20,
-                             refine_geometry=False)
+                             refine_geometry=refine_geometry)
             diagnostics.append({"reference": a, "moving": b, "inliers": match.inliers,
                                 "median_error": match.median_error if np.isfinite(match.median_error) else None,
                                 "overlap": match.overlap, "valid": match.valid,
@@ -118,6 +118,7 @@ def stitch(component_root: Path, output: Path, *, min_frames: int = 50,
                               "size_xy": size, "path": str(destination)})
     output.mkdir(parents=True, exist_ok=True)
     report = {"solver": "lm", "cycle_gating": cycle_gating,
+              "refine_geometry": refine_geometry,
               "min_frames": min_frames, "selected_tiles": len(selected),
               "groups": result_groups, "registrations": diagnostics}
     (output / "report.json").write_text(json.dumps(report, indent=2))
@@ -133,11 +134,13 @@ def main() -> None:
     parser.add_argument("--min-frames", type=int, default=50)
     parser.add_argument("--cycle-gating", action=argparse.BooleanOptionalAction, default=True,
                         help="reject tile loop constraints inconsistent with the strongest spanning tree")
+    parser.add_argument("--refine-geometry", action=argparse.BooleanOptionalAction, default=True,
+                        help="refine tile matches using SIFT points and vessel-edge distance (default: on)")
     args = parser.parse_args()
     if (args.output / "report.json").exists():
         parser.error(f"Output already contains a completed run: {args.output}")
     report = stitch(args.components.resolve(), args.output.resolve(), min_frames=args.min_frames,
-                    cycle_gating=args.cycle_gating)
+                    cycle_gating=args.cycle_gating, refine_geometry=args.refine_geometry)
     print(f"Built {len(report['groups'])} large mosaic(s) from {report['selected_tiles']} tiles")
 
 
