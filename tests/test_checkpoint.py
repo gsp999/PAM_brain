@@ -7,6 +7,8 @@ from pam_mosaic.checkpoint import Checkpoint
 from pam_mosaic.dataset import Record
 from pam_mosaic.pipeline import run
 from pam_mosaic.registration import Match
+from pam_mosaic.reconstruction import Calibration
+from pam_mosaic.roundtrip import PairDecision
 
 
 class CheckpointTests(unittest.TestCase):
@@ -36,15 +38,18 @@ class CheckpointTests(unittest.TestCase):
                 destination.mkdir(parents=True,exist_ok=True)
                 return (20,20)
             with patch('pam_mosaic.pipeline.reconstruct',return_value=(frame,frame)) as decode, \
+                 patch('pam_mosaic.pipeline.calibrate_roundtrip',return_value=Calibration()), \
+                 patch('pam_mosaic.pipeline.fuse_if_aligned',return_value=(frame,PairDecision(True,30,.1,0.,0.,'fused'))) as roundtrip, \
                  patch('pam_mosaic.pipeline.register',return_value=match) as register, \
                  patch('pam_mosaic.pipeline.candidate_pairs',return_value=[(0,1)]), \
                  patch('pam_mosaic.pipeline.fuse',side_effect=fuse):
-                first=run(records,output,reverse_even=False,use_backward=False)
+                first=run(records,output)
                 first_poses=np.load(output/'component_001/poses_xytheta.npy')
-                register.reset_mock();decode.reset_mock()
-                second=run(records,output,reverse_even=False,use_backward=False)
+                register.reset_mock();decode.reset_mock();roundtrip.reset_mock()
+                second=run(records,output)
                 self.assertEqual(register.call_count,0)
-                self.assertEqual(decode.call_count,2) # baseline calibration prepass only
+                self.assertEqual(decode.call_count,0)
+                self.assertEqual(roundtrip.call_count,0)
                 self.assertEqual(first['registrations'],second['registrations'])
                 np.testing.assert_array_equal(first_poses,np.load(output/'component_001/poses_xytheta.npy'))
 

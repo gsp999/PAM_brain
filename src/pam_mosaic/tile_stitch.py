@@ -126,13 +126,17 @@ def stitch(component_root: Path, output: Path, *, min_frames: int = 50,
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Connect local PAM mosaics")
-    parser.add_argument("--components", type=Path, default=Path("outputs/frontend_only_full"))
-    parser.add_argument("--output", type=Path, default=Path("outputs/frontend_only_stitched"))
+    parser.add_argument("--components", type=Path, required=True,
+                        help="first-stage output directory containing report.json")
+    parser.add_argument("--output", type=Path, required=True,
+                        help="new directory for stitched mosaics")
     parser.add_argument("--min-frames", type=int, default=50)
     parser.add_argument("--cycle-gating", action=argparse.BooleanOptionalAction, default=True,
                         help="reject tile loop constraints inconsistent with the strongest spanning tree")
     args = parser.parse_args()
-    report = stitch(args.components, args.output, min_frames=args.min_frames,
+    if (args.output / "report.json").exists():
+        parser.error(f"Output already contains a completed run: {args.output}")
+    report = stitch(args.components.resolve(), args.output.resolve(), min_frames=args.min_frames,
                     cycle_gating=args.cycle_gating)
     print(f"Built {len(report['groups'])} large mosaic(s) from {report['selected_tiles']} tiles")
 

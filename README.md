@@ -1,124 +1,123 @@
 # 二维光声血管图像拼接
 
-当前稳定版使用 **SIFT 点到点初值＋边缘距离场精化**，不是显式点到线版本。本次整理只准备代码上传，不实施后续优化。
+将一组双向扫描的光声 `.dat` 文件恢复为二维图像，并拼接为一张或多张大图。当前正式方案为：正返扫描校准与验证、轻度亮点处理、SIFT 初始配准、边缘距离场精化、逐帧位姿图优化、局部块融合、块间拼接。每个 `.dat` 文件对应一个全局采集位置。
 
-## 当前处理流程
+此仓库只保留稳定处理流程。整理后的代码已在本项目的 1301 份文件上重新全量运行，最终 7 个大块、1083 份文件进入一张 3050×3010 大图；最终浮点图、权重图和块位姿与原稳定版逐元素相同。该结果是本数据集的记录，不能作为新数据集的质量保证。正式结果、重跑路径及校验值见 [STABLE_RELEASE.md](STABLE_RELEASE.md)。
 
-1. 读取每个 `.dat` 中 MATLAB 顺序的 500×1000 矩阵，拆分正返两张 500×500 图，校正扫描轨迹和方向。
-2. 一个文件对应一个全局位姿。正返内部对齐通过验证后融合，否则选取较好的单向图像。
-3. 适度滤除紧凑亮点；配准不回退到未去噪图像。
-4. 建立相邻、短间隔和外观候选关系。SIFT＋RANSAC 提供初值，点到点 LM 后联合边缘距离场进行鲁棒 LM 精化。
-5. 对满足条件的断开相邻帧尝试增强特征；弱结构帧可尝试严格验证的相位相关平移。无可靠证据时保持断开。
-6. 每个连通分量内优化前端相对变换构成的位姿图，再融合局部块。
-7. 默认选择至少 50 个文件的局部块，进行块间配准、闭合一致性检查及块级 LM，最终加权融合。
+## 1. 输入数据要求
 
-边缘是 Canny 检出的图内亮度边缘，不是图像边框，也不是已确认身份的血管。当前距离场查找最近边缘，尚未验证血管方向、身份和分支对应。Canny 阈值为 35、90。配准视图和预览将固定强度范围 0.02～0.25 映射到 0～255，科学输出保持浮点数。
+程序支持与本项目相同的原始采集格式：
 
-融合采用边缘渐变权重的加权平均，不取最大值。当前先融合局部块，再变换融合大图，尚未实现最终画布的单次投影。默认没有绝对旋转先验；块间闭合角度检查不等于强行摆正图像。
+- 每个 `.dat` 文件先有 **8 字节头**，随后是 **500×1000 个小端 float64** 数值。
+- 数值按 MATLAB 列优先顺序排列；前后各 500 列分别是正向、返向扫描。恢复后每向为 500×500 像素。
+- 文件名中要有唯一的整数采集编号，代表采集顺序。默认识别 `1_Col2_tdT_58_scan1.dat` 这样的名称，其中 `scan1` 是扫描批次。
+- 可用 `--filename-regex` 适配其他文件名。正则表达式必须包含命名组 `(?P<index>...)`，可选 `(?P<scan>...)`；不提供 `scan` 时所有文件视为同一批次。编号不能重复。
+- 扫描日志可选。`--logs` 读取本项目格式的日志目录，或重复使用 `--log` 指定文件。没有日志仍可运行；日志时间戳不参与配准。
 
-实验性的局部地图几何、强度后端因子已移除，普通位姿图 LM 保留。显式点到线实验入口已撤回，历史辅助模块仍保留但不进入主流程。
+如果新数据的矩阵尺寸、数值类型、头长度、列顺序或正返布局不同，单换文件名规则不够，需要修改 `reconstruction.py` 并重新验证恢复结果。新数据集应先人工检查几张恢复帧的方向、强度和血管结构。
 
-## 环境与安装
+## 2. 环境与安装
 
-需要 Python 3.10 或更新版本，以及 NumPy、SciPy、OpenCV；依赖见 `pyproject.toml`。在仓库根目录执行：
+需要 Python 3.10 或更新版本，依赖为 NumPy、SciPy、OpenCV。建议在独立 Python 环境中，从仓库根目录执行：
 
 ```bash
 python -m pip install -e .
 python -m unittest discover -s tests -q
 ```
 
-本机也可直接使用下面的环境，无需重新安装包。换机器时将 Python 路径改成自己的环境，并准备数据目录。
+安装后有两个正式命令：`pam-mosaic`（恢复与局部块）和 `pam-stitch-tiles`（块间拼接）。若不安装，也可在仓库根目录用 `PYTHONPATH=src python -m pam_mosaic.cli` 和 `PYTHONPATH=src python -m pam_mosaic.tile_stitch` 运行。
 
-## 运行
+## 3. 用新数据运行
 
-### 全量处理与块间拼接
-
-```bash
-PYTHONPATH=src /home/gsp/miniconda3/envs/vision/bin/python -m pam_mosaic.cli --data PAM_Skull_FYH_20260929 --output outputs/current_run_full
-PYTHONPATH=src /home/gsp/miniconda3/envs/vision/bin/python -m pam_mosaic.tile_stitch --components outputs/current_run_full --output outputs/current_run_stitched --min-frames 50
-```
-
-安装包后对应入口为 `pam-mosaic` 和 `pam-stitch-tiles`。每次新实验选择新的输出目录，不覆盖保留结果。多个互不连通的大图会分别保存在 `mosaic_001`、`mosaic_002` 等目录中。
-
-### 小规模运行检查
+以下以 `/data/new_scan` 为输入举例。输出目录由使用者指定；建议每组数据和每次参数调整都用新的目录。命令会拒绝覆盖已有 `report.json` 的完整结果。
 
 ```bash
-PYTHONPATH=src /home/gsp/miniconda3/envs/vision/bin/python -m pam_mosaic.cli --start 9 --stop 18 --output outputs/smoke_full
-PYTHONPATH=src /home/gsp/miniconda3/envs/vision/bin/python -m pam_mosaic.tile_stitch --components outputs/smoke_full --output outputs/smoke_stitched --min-frames 2
-PYTHONPATH=src /home/gsp/miniconda3/envs/vision/bin/python -m unittest discover -s tests -q
+pam-mosaic \
+  --data /data/new_scan \
+  --output /data/new_scan_result/components
+
+pam-stitch-tiles \
+  --components /data/new_scan_result/components \
+  --output /data/new_scan_result/stitched \
+  --min-frames 50
 ```
 
-降低块大小门槛仅用于运行检查。子集会重新估计校准参数，不可与全量作严格效果比较。
+如果文件名是 `sample_001.dat`、`sample_002.dat`，第一步改为：
 
-### 参数说明
+```bash
+pam-mosaic \
+  --data /data/new_scan \
+  --filename-regex 'sample_(?P<index>\d+)\.dat' \
+  --output /data/new_scan_result/components
+```
 
-- `--start/--stop`：选择文件编号范围。
-- `--logs` 或重复 `--log`：提供扫描日志。
-- 默认启用正返验证、适度去噪和相邻恢复；`--no-frontend-recovery`、`--no-suppress-speckles` 可关闭后两项。
-- `--baseline`：历史直接正返平均路径，会关闭当前去噪与相邻恢复；块阶段可配合 `--no-cycle-gating`。不保证逐像素重现历史结果。
-- `--validate-rotations`：历史实验选项，默认关闭。
-- 已撤回的 `--registration-model`、`--frozen-run` 不能用于当前版本。
+常用选项：
 
-## 缓存与复现
-
-`.run_cache/` 每 100 帧提交恢复图像清单，每 50 对提交配准记录，阶段结束时也提交。相同条件下再次运行可复用这些阶段；位姿优化与融合不是逐块断点续跑。
-
-缓存检查原始文件元信息、校准参数、配置、源代码哈希、库版本和 OpenCV 线程数。条件改变时会拒绝复用，应使用新输出目录，不要强行套用历史缓存。校准与数值库差异可能影响临界匹配，算法对比应固定输入和运行环境。
-
-## 代码结构
-
-代码位于 `src/pam_mosaic/`：
-
-| 模块 | 作用 |
+| 选项 | 作用 |
 |---|---|
-| `dataset.py` | 数据索引、扫描编号和日志 |
-| `reconstruction.py` | 原始读取、拆帧、扫描轨迹校正 |
-| `roundtrip.py` | 正返内部校准、验证、融合或选择 |
-| `denoise.py` | 适度亮点处理 |
-| `frontend/legacy.py` | 当前 SIFT、距离场及相邻恢复 |
-| `frontend/geometry.py`、`tracking.py` | 历史显式点到线辅助模块，当前主流程不调用 |
-| `registration.py` | 配准接口兼容导入层 |
-| `graph.py`、`poses.py` | 候选关系、连通分量和位姿图 LM |
-| `pipeline.py`、`cli.py` | 主流程及命令入口 |
-| `checkpoint.py` | 缓存和配置一致性检查 |
-| `fusion.py`、`tile_stitch.py` | 融合、块间匹配和大图生成 |
-| `audit.py`、`evaluation.py` | 图像与接缝检查，不修改位姿 |
-| `comparison.py`、`controlled_view.py`、`frozen_inputs.py` | 历史实验查看与缓存工具，非默认流程 |
-| `frame_pipeline.py` | 历史正返独立定位实验，不是当前方案 |
+| `--start N --stop M` | 仅处理编号 N～M 的文件，适合首次小规模检查。 |
+| `--logs DIR` / `--log FILE` | 读取本项目格式的扫描日志；`--log` 可重复。 |
+| `--no-frontend-recovery` | 关闭对断开相邻关系的保守重试。 |
+| `--no-suppress-speckles` | 关闭轻度紧凑亮点处理。 |
+| `--temporal-window N` | 调整短间隔候选关系范围，默认 5。 |
+| `--appearance-neighbors N` | 调整外观候选数，默认 6。 |
+| `pam-stitch-tiles --min-frames N` | 选择进入块间拼接的最小局部块文件数，默认 50。小样本检查可临时降到 2。 |
+| `pam-stitch-tiles --no-cycle-gating` | 关闭块间闭合一致性筛选；正式流程保持默认开启。 |
 
-`tests/` 保存测试。`scripts/compare_factor_free.py` 比较本机历史输出，需先具备相应结果目录，不是首次运行必需步骤。`pam-mosaic-frames` 是历史入口，不应代替主入口；`pam-audit-mosaic` 是检查入口。
+两步命令均提供 `--help`。首次可用 `--start/--stop` 处理约 10 份文件，再用 `--min-frames 2` 检查程序是否跑通。子集会重新估计校准参数，不能用来严格比较全量图像质量。
 
-## 输出
+第一步支持中断后在相同数据、配置、代码和环境下复用 `.run_cache/` 的恢复帧与配准记录。源码、输入文件或数值库变化时，缓存会拒绝复用；请改用新输出目录。第二步会重新做块间配准和融合。报告中的组件路径由当前命令保存为绝对路径。
 
-- `mosaic_float64.npy`：浮点强度图。
-- `weight_map.npy`：融合权重和有效覆盖。
-- `mosaic_preview.png`：固定显示范围的预览。
-- `poses_xytheta.npy`：局部块逐帧位姿，平移为像素、角度为弧度。
-- `tile_poses_xytheta.npy`：块级位姿。
-- `report.json`：文件归属、匹配、处理决策和结果。
+## 4. 输出与判断
 
-小块和孤立帧保存于局部输出，但不一定进入大图。处理全部数据不代表全部进入大图。当前没有可用的物理像素标定，不能把像素距离直接解释为毫米。相关性、边缘距离和接缝风险仅是图像启发式指标，不证明解剖对应正确。
+第一步在 `components/` 生成 `component_001/` 等局部块及 `report.json`；小块与孤立帧也会保留。第二步在 `stitched/` 下生成 `mosaic_001/` 等大图及 `report.json`。若块之间没有可靠关系，可能得到多张大图，而不是强行拼成一张。
 
-## 保留的结果
+| 文件 | 含义 |
+|---|---|
+| `mosaic_float64.npy` | 浮点强度图；后续定量分析从这里读取。 |
+| `weight_map.npy` | 融合权重和有效覆盖；权重大于 0 的位置有数据。 |
+| `mosaic_preview.png` | 固定强度范围 0.02～0.25 的彩色预览；只用于观看。 |
+| `poses_xytheta.npy` | 局部块内逐文件位姿，平移单位为像素，旋转单位为弧度。 |
+| `tile_poses_xytheta.npy` | 最终大图中的局部块位姿。 |
+| `report.json` | 输入编号、分量、匹配和处理决策。 |
+| `.run_cache/` | 第一阶段缓存，可用于条件完全相同时继续未完成的运行。 |
 
-当前稳定版：`outputs/frontend_only_stitched/mosaic_001/mosaic_preview.png`。
+全量处理文件数不等于最终入图文件数。没有可靠对应关系时，程序保留断开的局部块。相关性、边缘距离和接缝检查只能作为图像证据，不证明解剖身份；目前也没有物理像素标定，不能直接把像素换算为毫米。
 
-此前全量运行处理 1301 份文件、5940 对候选关系，相邻成功 1106 条，形成 125 个分量，7 个大块组成包含 1083 份文件的 3050×3010 大图。这是此前全量记录，不是本次整理重新跑出的全量结果。
+## 5. 仓库结构：每个保留文件的用途
 
-- `outputs/lm_*`：原始基线。
-- `outputs/moderate_denoise_*`：之前的去噪版本。
-- `outputs/frontend_only_*`：当前距离场版本。
-- 未采用的显式点到线输出 `point_line_full`、`point_line_stitched`，旧实验 `controlled_v2`、`paatam_2d` 以及本次 `release_check_20261006_*` 临时结果已移入系统回收站，不再位于仓库中；需要时可从回收站恢复。
-- `outputs/backend_code_archive/`、`outputs/point_line_code_archive/`：撤回代码的本地备份；历史报告中的旧命令只适用于归档代码。
+```text
+README.md                         当前使用说明、格式与仓库结构
+STABLE_RELEASE.md                 本数据集正式结果、已知限制和校验值
+pyproject.toml                    依赖、打包配置与两个命令入口
+.gitignore                        排除原始数据、输出、缓存及本机状态
+src/pam_mosaic/
+  __init__.py                      Python 包标记
+  cli.py                           第一阶段命令行入口
+  dataset.py                       输入文件编号、扫描批次和日志索引
+  reconstruction.py                .dat 读取、正返拆分和扫描轨迹校正
+  roundtrip.py                     正返内部校准、验证、融合或择优
+  denoise.py                       保守的紧凑亮点处理
+  registration.py                  SIFT、RANSAC、距离场精化和相邻恢复
+  graph.py                         候选配准关系和连通分量
+  poses.py                         SE(2) 位姿表示与鲁棒位姿图优化
+  fusion.py                        逐帧融合、块级融合及预览
+  checkpoint.py                    输入/配置/代码绑定的恢复缓存
+  pipeline.py                      第一阶段整体流程和报告
+  tile_stitch.py                   第二阶段块间配准、筛选、融合及命令入口
+tests/
+  test_dataset.py                  文件名适配、编号和路径检查
+  test_reconstruction.py           MATLAB 数据读取与轨迹校正检查
+  test_roundtrip.py                正返融合行为检查
+  test_denoise.py                  亮点处理检查
+  test_registration.py             配准与恢复检查
+  test_poses.py                    位姿图优化检查
+  test_fusion.py                   融合输出检查
+  test_tile_stitch.py              块间一致性筛选检查
+  test_checkpoint.py               缓存身份与续跑检查
+docs/
+  history/HANDOFF_20261006.md     本数据集历史排查交接记录
+  experiments/IMPROVEMENT_PLAN_20261006.md  历史改进计划
+```
 
-## Git 上传注意事项
-
-本次整理验证（2026-10-06）：20 项自动测试通过，4 个已声明命令入口可导入；真实数据第 9～18 号文件的小规模恢复、29 对候选配准、局部融合和最终输出通过，输出数组有限且有有效覆盖。该子集最终只选择到一个满足测试门槛的局部块，因此不代表重新验证了全量块间配准效果。本次没有重新运行全部 1301 份数据。验证使用 NumPy 2.4.4、SciPy 1.17.1、OpenCV 4.13.0；临时测试输出验证完成后已移入回收站。
-
-`.gitignore` 排除原始数据、`outputs/`、缓存、环境及本地工具状态。新机器需自行准备数据；输出和代码归档不会随 Git 上传，请按需另行备份。
-
-提交时请包含新增的 `frontend/`、`checkpoint.py`、检查模块、测试和需要的脚本，并保留已确认的旧后端删除记录。只提交已跟踪文件的修改会漏掉必要的新模块。
-
-## 后续优化（尚未实施）
-
-依次评估缺少可用血管结构的帧、距离场的有效重叠区域、方向及外观一致性，再独立测试单次投影融合。无可靠血管结构的帧不必强行加入大图。这些优化尚未进入当前代码，上传本版后再开始。
+原始数据目录和 `outputs/` 被 `.gitignore` 排除，不会随代码上传。`outputs/frontend_only_*` 是本机稳定结果；`outputs/lm_*` 是历史基线；`outputs/archived_experiments_20261006/code/` 保存移出工作代码的比较和实验脚本，仅供本机追溯。换机器时需自行提供原始数据和选择新的输出路径。
