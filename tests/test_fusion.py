@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 import numpy as np
 
-from pam_mosaic.fusion import fuse_tiles
+from pam_mosaic.backend.fusion import fuse_tiles
 
 
 class FusionTests(unittest.TestCase):

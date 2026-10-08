@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 import numpy as np
 
-from pam_mosaic.reconstruction import read_raw, split_raw, _resample_x
+from pam_mosaic.preprocessing.reconstruction import read_raw, split_raw, _resample_x
 
 
 class ReconstructionTests(unittest.TestCase):

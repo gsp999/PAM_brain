@@ -3,7 +3,7 @@ import unittest
 import cv2
 import numpy as np
 
-from pam_mosaic.roundtrip import fuse_if_aligned
+from pam_mosaic.preprocessing.roundtrip import fuse_if_aligned
 
 
 class RoundtripTests(unittest.TestCase):

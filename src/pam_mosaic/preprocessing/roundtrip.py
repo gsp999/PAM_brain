@@ -9,7 +9,7 @@ import numpy as np
 
 from .reconstruction import (Calibration, calibrate_even_trajectory,
                              choose_even_direction, reconstruct)
-from .registration import register, registration_view
+from ..frontend.registration import register, registration_view
 from .denoise import bright_point_mask, remove_isolated_bright_points
 
 

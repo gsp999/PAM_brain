@@ -8,7 +8,8 @@ import numpy as np
 from .fusion import fuse_tiles
 from .graph import connected_components
 from .poses import Edge, initial_poses, optimize_poses, pose_to_matrix
-from .registration import register
+from ..frontend.registration import register
+from ..frontend.view import matching_image
 
 
 def _consistent_pose_graph(count: int, edges: list[Edge], scores: dict[tuple[int, int], float],
@@ -68,12 +69,14 @@ def stitch(component_root: Path, output: Path, *, min_frames: int = 50,
         raise ValueError("No components meet --min-frames")
     images = [np.load(Path(c["path"]) / "mosaic_float64.npy", mmap_mode="r") for c in selected]
     weights = [np.load(Path(c["path"]) / "weight_map.npy", mmap_mode="r") for c in selected]
+    intensity_range = tuple(source.get('intensity_range', (0.02, 0.25)))
+    matching_images = [matching_image(image, intensity_range) for image in images]
     edges = []
     scores = {}
     diagnostics = []
     for a in range(len(selected)):
         for b in range(a+1, len(selected)):
-            match = register(images[a], images[b], min_inliers=20,
+            match = register(matching_images[a], matching_images[b], min_inliers=20,
                              refine_geometry=refine_geometry)
             diagnostics.append({"reference": a, "moving": b, "inliers": match.inliers,
                                 "median_error": match.median_error if np.isfinite(match.median_error) else None,
@@ -108,7 +111,8 @@ def stitch(component_root: Path, output: Path, *, min_frames: int = 50,
             key = (local[global_edge["reference"]], local[global_edge["moving"]])
             global_edge.update(edge_audit[key])
         destination = output / f"mosaic_{group_number:03d}"
-        size = fuse_tiles([images[i] for i in group], [weights[i] for i in group], poses, destination)
+        size = fuse_tiles([images[i] for i in group], [weights[i] for i in group], poses, destination,
+                          display_lo=intensity_range[0], display_hi=intensity_range[1])
         np.save(destination / "tile_poses_xytheta.npy", poses)
         result_groups.append({"tiles": [selected[i]["path"] for i in group],
                               "source_files": len({source["file_index"] for i in group
@@ -119,6 +123,10 @@ def stitch(component_root: Path, output: Path, *, min_frames: int = 50,
     output.mkdir(parents=True, exist_ok=True)
     report = {"solver": "lm", "cycle_gating": cycle_gating,
               "refine_geometry": refine_geometry,
+              "input_format": source.get('input_format', 'bidirectional500'),
+              "background_correction": source.get('background_correction', False),
+              "background_method": source.get('background_method'),
+              "intensity_range": list(intensity_range),
               "min_frames": min_frames, "selected_tiles": len(selected),
               "groups": result_groups, "registrations": diagnostics}
     (output / "report.json").write_text(json.dumps(report, indent=2))

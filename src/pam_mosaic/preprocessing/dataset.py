@@ -1,4 +1,4 @@
-"""Index acquisition files and their log timestamps."""
+"""Index acquisition files and their log timestamps before decoding."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -30,7 +30,8 @@ def read_log(path: Path) -> dict[int, datetime]:
 
 def index_dataset(data_dir: Path, log_dir: Path | None = None,
                   log_files: list[Path] | None = None,
-                  filename_regex: str = DEFAULT_FILENAME_REGEX) -> list[Record]:
+                  filename_regex: str = DEFAULT_FILENAME_REGEX,
+                  file_glob: str = '*.dat') -> list[Record]:
     """Find .dat acquisitions; a custom regex needs an ``index`` group.
 
     The optional ``scan`` group separates acquisition batches for conservative
@@ -51,7 +52,7 @@ def index_dataset(data_dir: Path, log_dir: Path | None = None,
     for path in log_files or []:
         stamps.update(read_log(path))
     records = []
-    for path in data_dir.glob("*.dat"):
+    for path in data_dir.glob(file_glob):
         match = pattern.fullmatch(path.name)
         if match:
             index = int(match.group("index"))

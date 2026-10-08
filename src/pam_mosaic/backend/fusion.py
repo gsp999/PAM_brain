@@ -1,4 +1,4 @@
-"""Warp original floating-point frames into a shared mosaic canvas."""
+"""Warp preprocessed floating-point frames into a shared mosaic canvas."""
 from __future__ import annotations
 
 from pathlib import Path

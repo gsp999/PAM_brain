@@ -1,4 +1,4 @@
-"""Conservative removal of isolated positive impulse artifacts in MAP frames."""
+"""Shared conservative removal of isolated impulse artifacts in MAP frames."""
 from __future__ import annotations
 
 import cv2

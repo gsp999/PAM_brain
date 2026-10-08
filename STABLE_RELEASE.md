@@ -33,6 +33,8 @@
 
 ## 使用原则
 
+2026-10-08 已完成旧双向数据的背景校正全量重跑：`outputs/legacy_background_full_20261008/` 和 `outputs/legacy_background_stitched_20261008/`，8 块、1051 帧组成 3088×3006 大图。背景更黑，但入图帧数比旧配置少 32，尚未证明细血管或几何质量整体提升；该结果未替换本文冻结的稳定版。对照图及统计见 `outputs/legacy_background_comparison_20261008/`，完整命令见 README。
+
 1. 不覆盖上述正式结果；新配置在独立目录验证后再决定是否升级正式版本。
 2. 后续实验必须使用独立输出目录，并同时检查目标区域和留出区域。
 3. `outputs/lm_full/` 与 `outputs/lm_stitched/` 仅作为历史基线。
@@ -41,7 +43,9 @@
 
 ## 复现
 
-运行命令、环境、缓存规则和输出格式见 `README.md`。复现本文件所列旧稳定版块级处理时需加 `--no-refine-geometry`。已知问题和验证过程见 `docs/history/HANDOFF_20261006.md`。
+2026-10-07 输出清理后，本文件“正式结果”部分列出的数值图和局部块仍完整保留。重复的 `frontend_only_full/.run_cache/` 已清除；后续帧级试验使用 `stable_rerun_20261006_full/.run_cache/`。`stable_rerun_20261006_stitched/`、`tile_no_edge_control_20261006/`、旧基线及小规模实验目录仅保留报告/图片，其重复或实验数组已清除。旧稳定版最终数组仍见 `frontend_only_stitched/mosaic_001/`，当前配置最终数组见 `tile_edge_refinement_20261006/mosaic_001/`。本机输出索引与删除清单分别位于 `outputs/README.md` 和 `outputs/cleanup_20261007.json`。
+
+运行命令、环境、缓存规则和输出格式见 `README.md`。2026-10-08 背景校正已成为两种格式的默认前处理；复现本文件所列旧稳定版时，第一阶段需加 `--no-background-correction`，块级阶段需加 `--no-refine-geometry`。已知问题和验证过程见 `docs/history/HANDOFF_20261006.md`。
 
 ## 关键文件 SHA-256
 

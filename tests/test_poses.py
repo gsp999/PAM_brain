@@ -1,7 +1,7 @@
 import unittest
 import numpy as np
 
-from pam_mosaic.poses import Edge, _lm_residual_jacobian, optimize_poses, pose_to_matrix
+from pam_mosaic.backend.poses import Edge, _lm_residual_jacobian, optimize_poses, pose_to_matrix
 
 
 class PoseTests(unittest.TestCase):

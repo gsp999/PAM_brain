@@ -2,7 +2,7 @@ import unittest
 import cv2
 import numpy as np
 
-from pam_mosaic.registration import (register, register_enhanced_adjacent,
+from pam_mosaic.frontend.registration import (register, register_enhanced_adjacent,
                                      register_weak_signal_adjacent)
 
 

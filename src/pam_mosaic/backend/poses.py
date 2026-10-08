@@ -1,4 +1,4 @@
-"""Small SE(2) pose graph with robust loop constraints."""
+"""Global SE(2) pose graph with robust loop constraints."""
 from __future__ import annotations
 
 from dataclasses import dataclass

@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 from scipy.ndimage import distance_transform_edt, map_coordinates
 from scipy.optimize import least_squares
+from .view import registration_view
 
 
 @dataclass(frozen=True)
@@ -15,11 +16,6 @@ class Match:
     median_error: float
     overlap: float
     valid: bool
-
-
-def registration_view(image: np.ndarray, lo: float = 0.02, hi: float = 0.25) -> np.ndarray:
-    clipped = np.clip((image.astype(np.float32) - lo) / (hi - lo), 0, 1)
-    return np.uint8(np.rint(255 * clipped))
 
 
 def _matrix_from_params(p: np.ndarray) -> np.ndarray:

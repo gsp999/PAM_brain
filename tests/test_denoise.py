@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from pam_mosaic.denoise import remove_isolated_bright_points
+from pam_mosaic.preprocessing.denoise import remove_isolated_bright_points
 
 
 class DenoiseTests(unittest.TestCase):

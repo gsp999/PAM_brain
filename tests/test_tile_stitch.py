@@ -6,9 +6,9 @@ from unittest.mock import patch
 
 import numpy as np
 
-from pam_mosaic.poses import Edge
-from pam_mosaic.registration import Match
-from pam_mosaic.tile_stitch import _consistent_pose_graph, stitch
+from pam_mosaic.backend.poses import Edge
+from pam_mosaic.frontend.registration import Match
+from pam_mosaic.backend.tile_stitch import _consistent_pose_graph, stitch
 
 
 def translation(x: float) -> np.ndarray:
@@ -16,6 +16,25 @@ def translation(x: float) -> np.ndarray:
 
 
 class TileStitchTests(unittest.TestCase):
+    def test_pam512_matching_window_keeps_fused_physical_intensity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            components = []
+            for index in range(2):
+                component = root / f'component_{index}'
+                component.mkdir()
+                np.save(component / 'mosaic_float64.npy', np.full((8, 8), .03))
+                np.save(component / 'weight_map.npy', np.ones((8, 8)))
+                components.append({'frames': 50, 'path': str(component)})
+            (root / 'report.json').write_text(json.dumps({
+                'components': components, 'input_format': 'pam512', 'intensity_range': [0, .06]}))
+            with patch('pam_mosaic.backend.tile_stitch.register',
+                       return_value=Match(translation(0),25,0.,1.,True)) as mocked:
+                report = stitch(root, root / 'result')
+                np.testing.assert_allclose(mocked.call_args.args[0], .135, atol=1e-7)
+                self.assertEqual(report['intensity_range'], [0, .06])
+                np.testing.assert_allclose(np.load(root/'result/mosaic_001/mosaic_float64.npy'), .03)
+
     def test_tile_refinement_is_enabled_by_default_and_can_be_disabled(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -28,7 +47,7 @@ class TileStitchTests(unittest.TestCase):
                 components.append({'frames': 50, 'path': str(component)})
             (root / 'report.json').write_text(json.dumps({'components': components}))
             match = Match(translation(0), 25, 0.0, 1.0, True)
-            with patch('pam_mosaic.tile_stitch.register', return_value=match) as mocked:
+            with patch('pam_mosaic.backend.tile_stitch.register', return_value=match) as mocked:
                 report = stitch(root, root / 'with_edges')
                 self.assertTrue(report['refine_geometry'])
                 self.assertTrue(mocked.call_args.kwargs['refine_geometry'])
