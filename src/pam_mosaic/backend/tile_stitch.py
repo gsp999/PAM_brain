@@ -70,7 +70,8 @@ def stitch(component_root: Path, output: Path, *, min_frames: int = 50,
     images = [np.load(Path(c["path"]) / "mosaic_float64.npy", mmap_mode="r") for c in selected]
     weights = [np.load(Path(c["path"]) / "weight_map.npy", mmap_mode="r") for c in selected]
     intensity_range = tuple(source.get('intensity_range', (0.02, 0.25)))
-    matching_images = [matching_image(image, intensity_range) for image in images]
+    matching_images = [np.where(weight > 0, matching_image(image, intensity_range), .02).astype(np.float32)
+                       for image, weight in zip(images, weights)]
     edges = []
     scores = {}
     diagnostics = []
@@ -112,7 +113,8 @@ def stitch(component_root: Path, output: Path, *, min_frames: int = 50,
             global_edge.update(edge_audit[key])
         destination = output / f"mosaic_{group_number:03d}"
         size = fuse_tiles([images[i] for i in group], [weights[i] for i in group], poses, destination,
-                          display_lo=intensity_range[0], display_hi=intensity_range[1])
+                          display_lo=intensity_range[0], display_hi=intensity_range[1],
+                          adaptive_preview=source.get('background_method') == 'reference_alignment_signed_window_v3')
         np.save(destination / "tile_poses_xytheta.npy", poses)
         result_groups.append({"tiles": [selected[i]["path"] for i in group],
                               "source_files": len({source["file_index"] for i in group

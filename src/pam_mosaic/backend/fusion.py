@@ -2,10 +2,29 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import cv2
 import numpy as np
 from scipy.ndimage import distance_transform_edt
 from .poses import pose_to_matrix
+
+
+def save_preview(image: np.ndarray, weight: np.ndarray, output: Path,
+                 display_lo: float, display_hi: float, *, adaptive: bool = False) -> None:
+    """Render valid data only; a fused image has a different noise range to a frame."""
+    valid = weight > 0
+    if adaptive and np.any(valid):
+        lo, hi = np.percentile(image[valid], [.1, 99.9])
+        margin = max(.02*float(hi-lo), np.finfo(np.float32).eps*max(abs(float(lo)), 1.))
+        display_lo, display_hi = float(lo-margin), float(hi+margin)
+    preview = np.uint8(np.rint(255*np.clip((image-display_lo)/(display_hi-display_lo), 0, 1)))
+    preview[~valid] = 0
+    cv2.imwrite(str(output/'mosaic_preview.png'), cv2.applyColorMap(preview, cv2.COLORMAP_HOT))
+    (output/'preview_window.json').write_text(json.dumps({
+        'adaptive': adaptive, 'intensity_range': [display_lo, display_hi],
+        'valid_pixels': int(valid.sum()),
+        'fraction_below_window': float(np.mean(image[valid]<display_lo)) if np.any(valid) else 0.,
+        'fraction_above_window': float(np.mean(image[valid]>display_hi)) if np.any(valid) else 0.}, indent=2))
 
 
 def _canvas(poses: np.ndarray, shape: tuple[int, int]) -> tuple[int, int, np.ndarray]:
@@ -37,7 +56,8 @@ def _canvas_varied(poses: np.ndarray, shapes: list[tuple[int, int]]) -> tuple[in
 
 
 def fuse(frames: list[np.ndarray], poses: np.ndarray, output: Path,
-         *, display_lo: float = 0.02, display_hi: float = 0.25) -> tuple[int, int]:
+         *, display_lo: float = 0.02, display_hi: float = 0.25,
+         adaptive_preview: bool = False) -> tuple[int, int]:
     if not frames:
         raise ValueError("No frames to fuse")
     width, height, offset = _canvas(poses, frames[0].shape)
@@ -59,13 +79,13 @@ def fuse(frames: list[np.ndarray], poses: np.ndarray, output: Path,
     output.mkdir(parents=True, exist_ok=True)
     np.save(output / "mosaic_float64.npy", mosaic)
     np.save(output / "weight_map.npy", weight_sum)
-    preview = np.uint8(np.rint(255 * np.clip((mosaic - display_lo) / (display_hi - display_lo), 0, 1)))
-    cv2.imwrite(str(output / "mosaic_preview.png"), cv2.applyColorMap(preview, cv2.COLORMAP_HOT))
+    save_preview(mosaic, weight_sum, output, display_lo, display_hi, adaptive=adaptive_preview)
     return width, height
 
 
 def fuse_tiles(images: list[np.ndarray], weights: list[np.ndarray], poses: np.ndarray,
-               output: Path, display_lo: float = .02, display_hi: float = .25) -> tuple[int, int]:
+               output: Path, display_lo: float = .02, display_hi: float = .25,
+               *, adaptive_preview: bool = False) -> tuple[int, int]:
     width, height, offset = _canvas_varied(poses, [image.shape for image in images])
     weighted_sum = np.zeros((height, width), np.float64)
     weight_sum = np.zeros((height, width), np.float32)
@@ -81,6 +101,5 @@ def fuse_tiles(images: list[np.ndarray], weights: list[np.ndarray], poses: np.nd
     output.mkdir(parents=True, exist_ok=True)
     np.save(output / "mosaic_float64.npy", result)
     np.save(output / "weight_map.npy", weight_sum)
-    preview = np.uint8(np.rint(255 * np.clip((result-display_lo)/(display_hi-display_lo), 0, 1)))
-    cv2.imwrite(str(output / "mosaic_preview.png"), cv2.applyColorMap(preview, cv2.COLORMAP_HOT))
+    save_preview(result, weight_sum, output, display_lo, display_hi, adaptive=adaptive_preview)
     return width, height

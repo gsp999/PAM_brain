@@ -16,12 +16,15 @@ from .frontend.registration import (register, register_enhanced_adjacent,
 from .checkpoint import Checkpoint
 from .preprocessing.background import correct_background
 from .frontend.view import matching_image
+from .backend.allframe import parse_factors, refine_all_frames
 
 
 def run(records: list[Record], output: Path, *, temporal_window: int = 5,
         appearance_neighbors: int = 6, frontend_recovery: bool = True,
         suppress_speckles: bool = True, input_format: str = 'bidirectional500',
-        pam512_speckle_excess: float = .02, background_correction: bool = True) -> dict:
+        pam512_speckle_excess: float = .02, background_correction: bool = True,
+        backend_factors: str = 'none') -> dict:
+    selected_factors = parse_factors(backend_factors)
     if not records:
         raise ValueError("No data files selected")
     if not np.isfinite(pam512_speckle_excess) or pam512_speckle_excess <= 0:
@@ -41,8 +44,10 @@ def run(records: list[Record], output: Path, *, temporal_window: int = 5,
     cache = Checkpoint(output, records, {
         'input_state': state.cache_config, 'input_options': input_options,
         'input_format': input_format, 'intensity_range': intensity_range,
+        'background_policy': 'histogram_mode_zero_baseline_v1',
         'speckle_parameters': speckle_parameters,
         'background_correction': apply_background,
+        'backend_factors': selected_factors,
         'temporal_window': temporal_window, 'appearance_neighbors': appearance_neighbors,
         'frontend_recovery': frontend_recovery,
         'suppress_speckles': suppress_speckles})
@@ -60,10 +65,12 @@ def run(records: list[Record], output: Path, *, temporal_window: int = 5,
         image, decision = adapter.load_frame(record.path, state, input_options)
         frame_decision = {'file_index': record.index, 'accepted': False,
                           'selected': input_format, 'changed_pixels': 0, **decision}
-        baseline = 0.0
         if apply_background:
             image, baseline = correct_background(image)
-        frame_decision['background_baseline'] = baseline
+            frame_decision.update(background_baseline=baseline, background_applied=True,
+                                  background_reason='zero_baseline')
+        else:
+            frame_decision['background_baseline'] = 0.0
         roundtrip_decisions.append(frame_decision)
         if suppress_speckles:
             speckle_changes.append({key: frame_decision[key]
@@ -73,6 +80,7 @@ def run(records: list[Record], output: Path, *, temporal_window: int = 5,
         if (frame_number+1)%100 == 0 or frame_number+1 == len(records):
             print(f'reconstructed {frame_number+1}/{len(records)} files', flush=True)
     cache.flush_frames()
+    background_reference = None
 
     # Downstream geometry is independent of the reader. Matching uses a window
     # mapping; fusion retains the preprocessed floating-point frame values.
@@ -158,17 +166,35 @@ def run(records: list[Record], output: Path, *, temporal_window: int = 5,
         local_frames = [frames[i] for i in group]
         optimized = optimize_poses(poses, local_edges)
         component_dir = output / f"component_{component_id:03d}"
+        backend_report = None
+        if selected_factors:
+            baseline = optimized.copy()
+            optimized, backend_report = refine_all_frames(
+                [matching_frames[i] for i in group], baseline, local_edges,
+                factors=selected_factors, sequence_indices=group)
+            component_dir.mkdir(parents=True, exist_ok=True)
+            np.save(component_dir / 'poses_baseline_xytheta.npy', baseline)
+            backend_report['file_indices'] = [records[i].index for i in group]
+            (component_dir / 'backend_factors.json').write_text(
+                json.dumps(backend_report, indent=2, allow_nan=False))
         size = fuse(local_frames, optimized, component_dir,
-                    display_lo=intensity_range[0], display_hi=intensity_range[1])
+                    display_lo=intensity_range[0], display_hi=intensity_range[1],
+                    adaptive_preview=False)
         np.save(component_dir / "poses_xytheta.npy", optimized)
         components.append({"first_file": records[group[0]].index, "last_file": records[group[-1]].index,
                            "file_indices": [records[i].index for i in group],
                            "timestamps": [records[i].timestamp.isoformat() if records[i].timestamp else None for i in group],
-                           "frames": len(group), "size_xy": size, "path": str(component_dir)})
+                           "frames": len(group), "size_xy": size, "path": str(component_dir),
+                           "extra_factors": backend_report['extra_factors'] if backend_report else {}})
     report = {"solver": "lm", "validate_rotations": False,
               "input_format": input_format, "intensity_range": list(intensity_range),
+              "backend_factors": list(selected_factors),
+              "backend_mode": 'allframe_factors_v1' if selected_factors else 'original_pose_graph',
               "background_correction": apply_background,
-              "background_method": 'lower_histogram_mode' if apply_background else None,
+              "background_method": 'histogram_mode_zero_baseline_v1' if apply_background else None,
+              "background_reference": background_reference,
+              "cache_frame_stage": "after_background_correction" if apply_background else "after_reader",
+              "background_applied_frames": sum(d.get('background_applied', False) for d in roundtrip_decisions),
               "validated_roundtrip": state.report.get('validated_roundtrip', False),
               "frontend_recovery": frontend_recovery,
               "frontend_recovery_counts": recovery_counts,

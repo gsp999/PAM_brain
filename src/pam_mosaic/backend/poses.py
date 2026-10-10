@@ -14,6 +14,7 @@ class Edge:
     matrix: np.ndarray  # moving -> reference
     weight: float = 1.0
     kind: str = "frontend"
+    sqrt_information: np.ndarray | None = None  # normalized [x, y, 100*theta] residual
 
 
 def matrix_to_pose(m: np.ndarray) -> np.ndarray:
@@ -89,6 +90,10 @@ def _lm_residual_jacobian(poses: np.ndarray, edges: list[Edge]):
         ji[2, 2] = -100 * scale
         jj[:2, :2] = translation_j
         jj[2, 2] = 100 * scale
+        if edge.sqrt_information is not None:
+            residual[3*k:3*k+3] = edge.sqrt_information @ residual[3*k:3*k+3]
+            ji = edge.sqrt_information @ ji
+            jj = edge.sqrt_information @ jj
         for node, block in ((i, ji), (j, jj)):
             if node == 0:
                 continue
