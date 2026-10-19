@@ -51,6 +51,8 @@ def solve_measurement(initial, residual, kind, minimum_count):
     sigma=max(.75,float(1.4826*np.median(np.abs(after-np.median(after)))))
     # Normalize sample count; conservative information cap for correlated data.
     covariance=np.linalg.pinv(h+np.eye(3)*1e-9)*sigma**2
+    transport=np.eye(3);transport[:2,:2]=result[:2,:2].T
+    covariance=transport@covariance@transport.T
     confidence=np.clip(1/np.sqrt(np.maximum(np.diag(covariance),1e-6)),.05,1.)
     audit={'kind':kind,'accepted':accepted,'reason':'accepted' if accepted else 'degenerate_or_excessive_update',
            'support':len(after),'median_before':float(np.median(np.abs(before))),
@@ -61,7 +63,6 @@ def solve_measurement(initial, residual, kind, minimum_count):
 
 def intensity_measurement(current, neighbors, frames, features, poses, reference):
     source=[];targets=[];contributors=[];heldout=[]
-    anchor=np.linalg.inv(poses[reference])
     for j in neighbors:
         match=sift_inliers(frames[j],frames[current],reference_features=features[j],moving_features=features[current])
         if match is None:
@@ -69,7 +70,7 @@ def intensity_measurement(current, neighbors, frames, features, poses, reference
         src,dst,_=match
         if spread(src)<15:
             continue
-        target=transform(dst,anchor@poses[j])
+        target=transform(dst,poses[j])
         # Spatial hash keeps the same current feature out of train across all views.
         keys=np.rint(src*4).astype(int)
         validation=(keys[:,0]*73856093+keys[:,1]*19349663)%5==0
@@ -83,24 +84,34 @@ def intensity_measurement(current, neighbors, frames, features, poses, reference
     count=np.bincount(ids)
     src=np.column_stack([np.bincount(ids,weights=source[:,d])/count for d in range(2)])
     dst=np.column_stack([np.bincount(ids,weights=targets[:,d])/count for d in range(2)])
-    initial=anchor@poses[current]
+    initial=poses[current]
     good=np.linalg.norm(transform(src,initial)-dst,axis=1)<8
     src,dst=src[good],dst[good]
     measurement,audit=solve_measurement(initial,lambda m:(transform(src,m)-dst).ravel(),'intensity',48)
     audit['map_frames']=contributors
+    measurement=world_to_relative(measurement,audit,poses[reference])
     return measurement,audit,heldout
 
 
+def world_to_relative(measurement, audit, reference_pose):
+    audit['registration_frame']='component_world'
+    audit['information_frame']='moving_frame_log_error'
+    if measurement is None:
+        return None
+    matrix,information=measurement
+    audit['world_pose_xytheta']=matrix_to_pose(matrix).tolist()
+    return np.linalg.inv(reference_pose)@matrix,information
+
+
 def geometry_measurement(current, neighbors, points, poses, reference):
-    anchor=np.linalg.inv(poses[reference])
-    available=[transform(points[j],anchor@poses[j]) for j in neighbors if len(points[j])>20]
+    available=[transform(points[j],poses[j]) for j in neighbors if len(points[j])>20]
     if len(available)<2 or len(points[current])<50:
         return None,{'kind':'geometry','accepted':False,'reason':'insufficient_map'}
     local=np.concatenate(available)
     _,unique=np.unique(np.rint(local/2).astype(int),axis=0,return_index=True)
     local=local[unique]
     tree=cKDTree(local)
-    initial=anchor@poses[current]
+    initial=poses[current]
     query=transform(points[current],initial)
     distances,indices=tree.query(query,k=5)
     patches=local[indices];centers=patches.mean(axis=1)
@@ -118,4 +129,5 @@ def geometry_measurement(current, neighbors, points, poses, reference):
         nearest=tree.query(transform(src,m),k=1)[0]
         if float(np.median(nearest))>3:
             measurement=None;audit.update(accepted=False,reason='poor_map_overlap')
+    measurement=world_to_relative(measurement,audit,poses[reference])
     return measurement,audit

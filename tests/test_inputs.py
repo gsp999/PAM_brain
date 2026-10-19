@@ -12,7 +12,7 @@ from pam_mosaic.pipeline import run
 
 class InputAdapterTests(unittest.TestCase):
     def test_builtin_discovery_and_unknown_format(self):
-        self.assertEqual(set(available_formats()), {'bidirectional500', 'pam512'})
+        self.assertEqual(set(available_formats()), {'bidirectional500', 'pam512', 'throat'})
         self.assertIs(get_format('pam512'), available_formats()['pam512'])
         with self.assertRaisesRegex(ValueError, 'Unknown input format'):
             get_format('missing')

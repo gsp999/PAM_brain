@@ -14,6 +14,22 @@ from pam_mosaic.pipeline import run
 
 
 class AllFrameTests(unittest.TestCase):
+    def test_world_augmented_keeps_frontend_with_log_residual(self):
+        frames = [np.full((32, 32), .02, np.float32)]*3
+        baseline = np.zeros((3, 3))
+        original = [Edge(0, 1, np.eye(3)[:2]), Edge(1, 2, np.eye(3)[:2])]
+        def measured(k, neighbors, points, poses, reference):
+            return (np.eye(3), np.eye(3)), {'kind': 'geometry'}
+        with patch('pam_mosaic.backend.allframe.geometry_measurement', side_effect=measured), \
+             patch('pam_mosaic.backend.allframe.optimize_poses', return_value=baseline.copy()) as solve:
+            _, audit = refine_all_frames(frames, baseline, original, factors='geometry')
+        self.assertTrue(solve.call_args.kwargs['lie_log'])
+        self.assertEqual(len(solve.call_args.args[1]), 5)
+        self.assertIs(solve.call_args.args[1][0], original[0])
+        self.assertIs(solve.call_args.args[1][1], original[1])
+        self.assertEqual(audit['optimization_components'], [[0, 1, 2]])
+        self.assertEqual(audit['fixed_baseline_anchors'], [0])
+
     def test_options_and_disabled_exact_identity(self):
         self.assertEqual(parse_factors('none'), ())
         self.assertEqual(parse_factors('intensity,geometry'), ('geometry', 'intensity'))
@@ -47,14 +63,16 @@ class AllFrameTests(unittest.TestCase):
     def test_sequence_gaps_not_compressed(self):
         frames = [np.full((32, 32), .02, np.float32)]*3
         with patch('pam_mosaic.backend.allframe.geometry_measurement') as measurement:
-            result, audit = refine_all_frames(frames, np.zeros((3, 3)), [],
+            result, audit = refine_all_frames(frames, np.zeros((3, 3)),
+                                             [Edge(0, 1, np.eye(3)[:2]), Edge(1, 2, np.eye(3)[:2])],
                                              factors='geometry', sequence_indices=[0, 40, 80])
         measurement.assert_not_called()
         self.assertFalse(audit['extra_factors'])
 
     def test_blank_frames_no_spurious_constraints(self):
         frames = [np.full((32, 32), .02, np.float32)]*3
-        result, audit = refine_all_frames(frames, np.zeros((3, 3)), [], factors='all')
+        original = [Edge(0, 1, np.eye(3)[:2]), Edge(1, 2, np.eye(3)[:2])]
+        result, audit = refine_all_frames(frames, np.zeros((3, 3)), original, factors='all')
         self.assertFalse(audit['extra_factors'])
         self.assertTrue(np.isfinite(result).all())
 
@@ -101,7 +119,7 @@ class AllFrameTests(unittest.TestCase):
                 report = run([Record(1, 1, raw)], root/'result', input_format='test_sensor',
                              background_correction=False, backend_factors='all')
             self.assertFalse(report['background_correction'])
-            self.assertEqual(report['backend_mode'], 'allframe_factors_v1')
+            self.assertEqual(report['backend_mode'], 'world_augmented_log_v2')
             self.assertEqual(report['intensity_range'], [.02, .25])
             np.testing.assert_array_equal(np.load(root/'result/.run_cache/frame_0000.npy'), frame)
             self.assertTrue((root/'result/component_001/backend_factors.json').exists())

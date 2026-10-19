@@ -1,14 +1,16 @@
-"""Optional offline factors; retain every frame and every original graph edge."""
+"""World-frame local measurements augment the original all-frame pose graph."""
 from collections import Counter
 import cv2
 import numpy as np
 from .poses import Edge, pose_to_matrix, optimize_poses
+from .graph import connected_components
 from .factors import geometry_measurement, intensity_measurement, edge_points, homogeneous, spread
 from ..frontend.registration import register, sift_inliers, _overlap, _warped_correlation
 from ..frontend.view import registration_view
 from ..frontend.candidates import appearance_vector
 
 FACTOR_KINDS = ('geometry', 'intensity', 'loop')
+ALGORITHM = 'world_augmented_log_v2'
 
 
 def parse_factors(value):
@@ -42,8 +44,10 @@ def refine_all_frames(frames, baseline, edges, *, factors=FACTOR_KINDS,
         raise ValueError('Frames, poses and acquisition-order indices must agree')
     if count > 1 and np.any(np.diff(sequence) <= 0):
         raise ValueError('Acquisition-order indices must increase strictly')
-    summary = {'algorithm': 'allframe_factors_v1', 'keyframes_used': False,
+    summary = {'algorithm': ALGORITHM, 'keyframes_used': False,
                'all_original_edges_preserved': True, 'frames': count,
+               'local_registration_frame': 'component_world',
+               'pose_residual': 'se2_log',
                'original_edges': len(edges), 'enabled_factors': list(factors),
                'extra_factors': {}, 'measurements': [], 'extra_edges': []}
     if not factors or count < 2:
@@ -120,5 +124,13 @@ def refine_all_frames(frames, baseline, edges, *, factors=FACTOR_KINDS,
                                    matrix=e.matrix.tolist(), weight=e.weight,
                                    sqrt_information=e.sqrt_information.tolist() if e.sqrt_information is not None else None)
                               for e in extra]
-    optimized = optimize_poses(baseline, list(edges)+extra) if extra else baseline.copy()
+    combined = list(edges)+extra
+    summary['factor_components'] = connected_components(count, [(e.reference, e.moving) for e in extra])
+    groups = connected_components(count, [(e.reference, e.moving) for e in combined])
+    if len(groups) != 1:
+        raise ValueError('Backend requires a connected frontend component')
+    summary['optimization_components'] = groups
+    summary['fixed_baseline_anchors'] = [0]
+    summary['optimization_edges'] = len(combined)
+    optimized = optimize_poses(baseline, combined, lie_log=True)
     return optimized, summary

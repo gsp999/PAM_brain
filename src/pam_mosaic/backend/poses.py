@@ -47,12 +47,25 @@ def initial_poses(count: int, edges: list[Edge]) -> np.ndarray:
     return poses
 
 
-def optimize_poses(start: np.ndarray, edges: list[Edge]) -> np.ndarray:
+def optimize_poses(start: np.ndarray, edges: list[Edge], *, lie_log: bool = False) -> np.ndarray:
     """Optimize relative SE(2) measurements; anchor node zero."""
     n = len(start)
     if n < 2 or not edges:
         return start.copy()
-    return _optimize_lm(start, edges)
+    return _optimize_lm(start, edges, lie_log=lie_log)
+
+
+def _log_translation(angle):
+    """SE(2) inverse left Jacobian V^-1 and its angle derivative."""
+    if abs(angle) < 1e-4:
+        a = 1 - angle**2/12 - angle**4/720
+        da = -angle/6 - angle**3/180
+    else:
+        half = angle/2
+        a = half / np.tan(half)
+        da = .5/np.tan(half) - half*.5/np.sin(half)**2
+    return (np.array([[a, angle/2], [-angle/2, a]]),
+            np.array([[da, .5], [-.5, da]]))
 
 
 def _huber_cost(residual: np.ndarray, scale: float = 3.0) -> float:
@@ -61,7 +74,7 @@ def _huber_cost(residual: np.ndarray, scale: float = 3.0) -> float:
                           scale * magnitude - 0.5 * scale**2).sum())
 
 
-def _lm_residual_jacobian(poses: np.ndarray, edges: list[Edge]):
+def _lm_residual_jacobian(poses: np.ndarray, edges: list[Edge], *, lie_log=False):
     """Exact SE(2) relative-pose residual and sparse analytic Jacobian."""
     rows, cols, values = [], [], []
     residual = np.empty(3 * len(edges), dtype=float)
@@ -90,6 +103,15 @@ def _lm_residual_jacobian(poses: np.ndarray, edges: list[Edge]):
         ji[2, 2] = -100 * scale
         jj[:2, :2] = translation_j
         jj[2, 2] = 100 * scale
+        if lie_log:
+            # Log(Z^-1 T_i^-1 T_j)^vee, with angular units scaled by 100.
+            v_inv, derivative = _log_translation(angle_error)
+            translation = residual[3*k:3*k+2].copy()
+            residual[3*k:3*k+2] = v_inv @ translation
+            ji[:2] = v_inv @ ji[:2]
+            jj[:2] = v_inv @ jj[:2]
+            ji[:2, 2] -= derivative @ translation
+            jj[:2, 2] += derivative @ translation
         if edge.sqrt_information is not None:
             residual[3*k:3*k+3] = edge.sqrt_information @ residual[3*k:3*k+3]
             ji = edge.sqrt_information @ ji
@@ -108,10 +130,10 @@ def _lm_residual_jacobian(poses: np.ndarray, edges: list[Edge]):
     return residual, jacobian
 
 
-def _optimize_lm(start: np.ndarray, edges: list[Edge], max_iterations: int = 40) -> np.ndarray:
+def _optimize_lm(start: np.ndarray, edges: list[Edge], max_iterations: int = 40, *, lie_log=False) -> np.ndarray:
     poses = start.copy()
     damping = 1e-2
-    residual, jacobian = _lm_residual_jacobian(poses, edges)
+    residual, jacobian = _lm_residual_jacobian(poses, edges, lie_log=lie_log)
     cost = _huber_cost(residual)
     for _ in range(max_iterations):
         magnitude = np.abs(residual)
@@ -129,7 +151,7 @@ def _optimize_lm(start: np.ndarray, edges: list[Edge], max_iterations: int = 40)
                 continue
             candidate = poses.copy()
             candidate[1:] += step.reshape(-1, 3)
-            next_residual, next_jacobian = _lm_residual_jacobian(candidate, edges)
+            next_residual, next_jacobian = _lm_residual_jacobian(candidate, edges, lie_log=lie_log)
             next_cost = _huber_cost(next_residual)
             if next_cost < cost:
                 improvement = cost - next_cost

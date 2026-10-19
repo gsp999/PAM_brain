@@ -16,7 +16,7 @@ from .frontend.registration import (register, register_enhanced_adjacent,
 from .checkpoint import Checkpoint
 from .preprocessing.background import correct_background
 from .frontend.view import matching_image
-from .backend.allframe import parse_factors, refine_all_frames
+from .backend.allframe import ALGORITHM, parse_factors, refine_all_frames
 
 
 def run(records: list[Record], output: Path, *, temporal_window: int = 5,
@@ -48,6 +48,7 @@ def run(records: list[Record], output: Path, *, temporal_window: int = 5,
         'speckle_parameters': speckle_parameters,
         'background_correction': apply_background,
         'backend_factors': selected_factors,
+        'backend_algorithm': ALGORITHM if selected_factors else 'original_pose_graph',
         'temporal_window': temporal_window, 'appearance_neighbors': appearance_neighbors,
         'frontend_recovery': frontend_recovery,
         'suppress_speckles': suppress_speckles})
@@ -189,7 +190,7 @@ def run(records: list[Record], output: Path, *, temporal_window: int = 5,
     report = {"solver": "lm", "validate_rotations": False,
               "input_format": input_format, "intensity_range": list(intensity_range),
               "backend_factors": list(selected_factors),
-              "backend_mode": 'allframe_factors_v1' if selected_factors else 'original_pose_graph',
+              "backend_mode": ALGORITHM if selected_factors else 'original_pose_graph',
               "background_correction": apply_background,
               "background_method": 'histogram_mode_zero_baseline_v1' if apply_background else None,
               "background_reference": background_reference,

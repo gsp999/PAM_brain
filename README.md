@@ -39,6 +39,17 @@ pam-stitch-tiles --components ./outputs/pam512_new_full --output ./outputs/pam51
 
 其余参数使用现有默认值。第二阶段从第一阶段报告读取强度窗口，不重复扣背景；只有一个局部块时仍可直接运行第二步。CLI 的 `--backend-factors` 默认是 `none`，**复现当前确认方案必须显式指定 `all`**。
 
+## 内窥镜 throat 数据
+
+按 `throat/rec.m` 恢复 256×256 螺旋扫描图像：小端 double、去掉末尾值、每 142 点用第二点替换首点、第一段扫描做 6 倍线性插值、同一像素保留最后写入值、零填充 2×2 中值滤波。每个文件含两段扫描，遵循原脚本 `for i = 1` 仅使用第一段；处理全部 houlong 编号。显示窗口沿用 MATLAB 的 0–0.1，不额外应用 PAM512 亮点滤波。
+
+```bash
+pam-mosaic --input-format throat --data ./throat \
+  --background-correction --backend-factors all --output ./outputs/throat_full_20261016
+pam-stitch-tiles --components ./outputs/throat_full_20261016 \
+  --min-frames 1 --output ./outputs/throat_stitched_20261016
+```
+
 ## 输入与新数据复用
 
 | 格式 | 数据布局 | 默认文件名 |
@@ -83,6 +94,8 @@ pam-stitch-tiles --components /data/new_scan_result/components --output /data/ne
 | `--temporal-window`、`--appearance-neighbors` | 前端候选范围，默认 5、6 |
 | `pam-stitch-tiles --min-frames` | 进入块级阶段的最小帧数，默认 50 |
 
+当前开启因子后固定使用世界坐标局部配准，最终将前端边与附加因子共同进行 SE(2) Log 位姿图优化。实验参数 `--backend-style` 已移除，直接使用 `--backend-factors all`；`none` 仍可关闭附加后端。
+
 `full/` 保存 `component_001/` 等局部块；`stitched/` 保存 `mosaic_001/` 等最终图。未可靠连通的组分别保留，因此最终可能不止一张图。
 
 | 文件 | 用途 |
@@ -102,9 +115,9 @@ pam-stitch-tiles --components /data/new_scan_result/components --output /data/ne
 | 数据 | 局部块与逐帧缓存 | 最终大图 | 入图情况 |
 |---|---|---|---|
 | 旧数据 | `outputs/legacy_allframe_factors_full_20261010/` | `outputs/legacy_allframe_factors_stitched_20261010/mosaic_001/` | 1301 帧、125 局部块；7 大块、1083 帧，3068×3006 |
-| 512 | `outputs/pam512_main_full_20261012/` | `outputs/pam512_main_stitched_20261012/mosaic_001/` | 569 帧全部入图，1298×1876 |
+| 512（当前） | `outputs/pam512_world_augmented_full_20261019/` | `outputs/pam512_world_augmented_stitched_20261019/mosaic_001/` | 569 帧全部入图，1298×1876 |
 
-512 主流程实测 **271.73 秒（4 分 31.73 秒）**，包含原始读取至最终保存；记录在 `outputs/pam512_main_full_20261012/timing.json`。保留文件的 SHA-256 与清理记录在 `outputs/current_results.json`。
+当前 512 主流程实测 **257.44 秒（4 分 17.44 秒）**，记录在 `outputs/pam512_world_augmented_full_20261019/comparison/summary.json`。旧数据表中结果仍为此前版本，未用当前后端重跑。历史 512 结果和对照输出保留；`outputs/current_results.json` 为 10 月 12 日的归档清单，不代表本次版本。
 
 原始数据和 `outputs/` 不随 Git 上传，换机器需另行备份。
 
@@ -130,6 +143,7 @@ src/pam_mosaic/
     formats/
       bidirectional500.py         旧双向读取适配器
       pam512.py                   MATLAB MAP1 读取适配器
+      throat.py                   throat 数据读取适配器
   frontend/
     view.py                       配准视图与强度窗口映射
     candidates.py                 时间及外观候选关系
@@ -146,16 +160,18 @@ tests/
   test_inputs.py                  适配器发现及通用流程复用
   test_reconstruction.py          旧数据布局与轨迹恢复
   test_pam512.py                  PAM 数据头、布局、513 列裁剪
+  test_throat.py                  throat 输入读取
   test_roundtrip.py               正返验证与择优
   test_denoise.py                 亮点处理
   test_background.py             背景基线与负值保留
   test_registration.py           相对配准与失败恢复
   test_poses.py                  位姿图与雅可比
   test_allframe.py               全帧因子、原关系保留与回环筛选
+  test_world_factors.py          世界坐标配准与参考帧转换一致性
   test_fusion.py                 权重与无数据区域处理
   test_tile_stitch.py            块级配准和闭合一致性筛选
   test_checkpoint.py             缓存身份与续跑
-outputs/                          两组当前结果、索引和校验清单
+outputs/                          当前结果、历史对照及归档校验清单
 ```
 
-各子目录的 `__init__.py` 为包标记。测试只覆盖当前支持的功能；历史实验代码、对比结果和生成缓存已清理。
+各子目录的 `__init__.py` 为包标记。测试覆盖当前支持的功能；本轮实验后端分支已移除，已有结果与对照图保留。
